@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# demo build and run artifacts
+/opm/
+/.venv/
+/case/runs/
+# superseded artifacts from the previous demo layout
+/case/enif/
+/case/lowrank_gn/
+/case/share/
+/case/results/

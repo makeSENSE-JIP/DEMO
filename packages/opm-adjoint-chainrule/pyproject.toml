@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "opm-adjoint-chainrule"
+version = "0.1.0"
+description = "Explicit physical-to-parameter permeability pullbacks for OPM adjoints"
+requires-python = ">=3.12,<3.15"
+readme = "README.md"
+license = "GPL-3.0-only"
+dependencies = ["numpy>=2,<3"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/opm_adjoint_chainrule"]

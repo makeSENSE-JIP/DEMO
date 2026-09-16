@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "opm-ert-demo"
+version = "0.1.0"
+description = "5SPOT history-matching benchmark demo: OPM Flow adjoints + ERT (low-rank GN vs EnIF-MDA)"
+readme = "README.md"
+license = "GPL-3.0-only"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    # ERT fork with the `low_rank_gn` CLI mode, ert-flow-adjoint forward-model
+    # wrapper and the pinned matern-egrid prior (makeSENSE-JIP/Matern).
+    "ert[low-rank-gn] @ git+https://github.com/makeSENSE-JIP/ert.git@55726c4a2f1f6a4784dff6a8a53ed8501683f072",
+    # Direct import for prior sampling in make_case (same pin as ert's extra).
+    "matern-egrid @ git+https://github.com/makeSENSE-JIP/Matern.git@9ad83b4b4ed2a18eb8e8214e0a9764cea759d9ca",
+]
+
+[project.scripts]
+opm-ert-demo-make-case = "opm_ert_demo.make_case:main"
+opm-ert-demo-collect = "opm_ert_demo.collect:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/opm_ert_demo"]
+
+[tool.hatch.metadata]
+allow-direct-references = true

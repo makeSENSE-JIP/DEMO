@@ -1,0 +1,27 @@
+{
+  "description": "Original calibrated 2-D 5SPOT benchmark inputs; no simulator rerun",
+  "ordering": "active cells in Fortran (i-fastest) order",
+  "shape": [
+    50,
+    50,
+    1
+  ],
+  "mean_log_permx": 6.214608098422191,
+  "sigma": 0.5,
+  "range": 2500.0,
+  "anisotropy": 2.0,
+  "rotation_degrees": 45.0,
+  "calibrate": true,
+  "seed": 0,
+  "source_sha256": {
+    "EnIF-MDA/DATA/true_data.pkl": "d6b77304a29afd2e96b25bffa4d19228dc25390d9fc1eac87e9081077ee3b6b8",
+    "EnIF-MDA/DATA/true_data_var.pkl": "a1065c2912fd9742cd92a5762033fb50f6fa3795f7cf40c517752d7a7c10fbfd",
+    "EnIF-MDA/PRIOR/sample_prior.py": "ead86749f8aaa6acc199eace71d0d8c0241fd24b77512d3dce96004639b44004",
+    "LowRank-GN-Hessian/run_script.py": "99e41b9c008b316878f64979aa2a81bd8504d28993cd938b5c65ba10709300e5",
+    "code/PyJutulDarcy/jutuldarcy/matern.py": "82c74d3119c344a271509b000e1a9a77388fd977d29989950c5c60ddd99911a3"
+  },
+  "asset_sha256": {
+    "observations.json": "a79e49c7b450c6a07b3cff3c6f34d260ed8799583a61f13e973ca85cdd44f16e",
+    "prior_precision.npz": "f9208cbdd861173cb439830327d1df9a7d32c2254c4e576e3479127666abecea"
+  }
+}
