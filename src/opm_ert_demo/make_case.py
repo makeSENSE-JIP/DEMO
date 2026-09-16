@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import math
 import shutil
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -15,6 +16,9 @@ from ._common import write_grdecl
 from .config import BenchmarkSettings
 from .observations import Observations
 from .prior import ReferencePrior
+from .wellindex import frozen_well_indexes
+
+CELL_EXTENTS_M = (100.0, 100.0, 1.0)
 
 
 def sha256(path):
@@ -75,7 +79,15 @@ def prepare_case(source, target, settings, flow, adjoint):
     template = (source / "MODEL.template").read_text()
     if template.count("@PERMEABILITY_TIES@") != 1:
         raise ValueError("MODEL.template requires one @PERMEABILITY_TIES@ marker")
-    (target / "MODEL.template").write_text(template.replace("@PERMEABILITY_TIES@", ties))
+    template = template.replace("@PERMEABILITY_TIES@", ties)
+    prior_mean_md = math.exp(reference["mean_log_permx"])
+    well_index = frozen_well_indexes(prior_mean_md, CELL_EXTENTS_M[0], CELL_EXTENTS_M[1], CELL_EXTENTS_M[2])
+    for name in well_index:
+        marker = f"@WI_{name}@"
+        if template.count(marker) != 1:
+            raise ValueError(f"MODEL.template requires one {marker} marker")
+        template = template.replace(marker, f"{well_index[name]:.10g}")
+    (target / "MODEL.template").write_text(template)
     share = target / "share"
     (share / "prior").mkdir(parents=True)
     obs = Observations.load(target / "reference/observations.json")
@@ -107,6 +119,13 @@ def prepare_case(source, target, settings, flow, adjoint):
                        "mapping": mapping.to_dict(), "gradient_input_units": "per m^2",
                        "parameter_units": "natural-log mD", "ownership": "provisional standalone package"},
         "prior": "reference/prior_precision.npz", "observations": "reference/observations.json",
+        "frozen_well_index": {
+            "reason": "adjoint dJ/dPERM omits dWI/dK; tabulated WI removes the WI(K) path",
+            "formula": "Peaceman (opm-common WellConnections.cpp), METRIC md*m",
+            "permeability_md": prior_mean_md, "cell_extents_m": list(CELL_EXTENTS_M),
+            "well_radius_m": 0.25, "skin": 0.0,
+            "values_md_m": well_index,
+        },
         "input_sha256": input_hashes(target),
         "executables": {name: {"path": str(path), "sha256": sha256(path)}
                         for name, path in (("flow", flow), ("flow_adjoint", adjoint))},

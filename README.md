@@ -117,52 +117,54 @@ code/venv_laplace/bin/python tools/export_reference.py \
   forward batches may use `jobs` workers (default 1, matching the parent's
   serial protocol).
 
-## Known gradient limitation: the Peaceman well-index term is missing
+## Well-index handling: frozen COMPDAT WI (workaround for a missing adjoint term)
 
-The 5SPOT COMPDAT entries default the well index (`2* 0.25`), so OPM computes
+The 5SPOT COMPDAT entries originally defaulted the well index, so OPM computed
 `WI` from the perforated cell's permeability (Peaceman: `WI ∝ sqrt(kx·ky)`).
-The forward map `K → J` therefore contains a well-index path, and the total
-derivative requires, at each perforated cell,
+The forward map `K → J` then contains a well-index path whose total derivative
+requires, at each perforated cell,
 
 ```
 dJ/dK = [dJ/dK via inter-block transmissibility]   <- what OPM's adjoint emits
-      + lambda_cell · dq/dWI · dWI/dK              <- missing (cell rows)
-      + lambda_well  · dR_well/dWI · dWI/dK        <- missing (well rows)
+      + lambda_cell · dq/dWI · dWI/dK              <- was missing (cell rows)
+      + lambda_well  · dR_well/dWI · dWI/dK        <- was missing (well rows)
 ```
 
 `opm-adjoint` assembles `dJ/dPERM` exclusively from the inter-cell
-face-transmissibility gradient (`AdjointSolver::gatherPermGradients_`); the
-well rows are only contracted in the endpoint-scaling path. The
-`opm-adjoint-chainrule` package composes the three emitted columns correctly,
-but those columns are incomplete at well cells — the limitation is upstream of
-the package.
+face-transmissibility gradient (`AdjointSolver::gatherPermGradients_`), so with
+defaulted WI the extracted derivative missed the Peaceman term: measured
+against record/replay finite differences, ~77–84% of the true derivative at
+perforated cells was missing (~80% of a full random-direction derivative),
+while interior cells and the tied-permeability composition were correct to
+0.4–0.7%.
 
-Measured against central finite differences (record/replay with the same
-`matchw` objective; `/tmp` experiment, 2026-09):
+**Workaround (active).** `make-case` renders the run decks with an explicit,
+tabulated COMPDAT `WI` (OPM uses deck values verbatim), freezing the well
+index at the prior-mean Peaceman value computed by the formula replicated from
+`opm-common`'s `WellConnections.cpp` (`src/opm_ert_demo/wellindex.py`, 718.5833
+md·m for kx=ky=500 mD, 100x100x1 m cells, rw=0.25 m, skin 0). Frozen values and
+inputs are recorded in each run manifest. After freezing, the same FD tests
+give **−2.1% at the well cell and −0.06% at an interior cell** — the missing
+term is gone; a small ε-independent residual (sub-percent to ~2%) remains at
+all cells upstream and is documented below.
 
-| Test | Adjoint / FD |
-|---|---|
-| Interior cell (13,25), eps 1e-2 | 0.7% relative error — correct |
-| Interior-only random direction (2495 cells) | 0.4–0.5% relative error — correct |
-| P1 well cell, eps 1e-2 | ~77–84% of the true derivative missing |
-| Full random direction (all 2500 cells) | ~80% of the directional derivative missing |
+Caveats, recorded here for the pending upstream decision:
 
-The interior-only agreement also confirms the tied-permeability composition
-(`gx + gy + 0.001·gz`) itself. Because rate-objective sensitivity concentrates
-at perforated cells, the omission dominates global directional derivatives.
-A control deck with explicitly tabulated COMPDAT `WI` (no `K` dependence)
-shows no well-cell anomaly (≤2.4%, the same residual level as interior cells)
-— isolating the missing term to the `WI(K)` path. Consequences for this demo:
-GN search directions and the Laplace curvature are accurate away from the five
-well cells and materially wrong at them, until the term is added upstream
-(in `opm-adjoint`, by contracting `lambda_cell` and `lambda_well` against
-`dq/dWI · dWI/dK`) or the deck freezes `WI` by tabulating it. A small
-sub-percent systematic residual also remains at all cells (0.4–2.4%,
-eps-independent), consistent with minor upstream terms; it does not affect
-the conclusions above.
+- OPM's *defaulted*-WI path in this build behaves as a much smaller effective
+  connection factor (~5.2 md·m implied by WPI ratios and rate calibration,
+  versus 718.6 from the documented formula; the rate response is non-monotone,
+  so this cannot be calibrated reliably). Freezing at the formula value
+  therefore changes prior-mean rates by ≲1% (the BHP producers are
+  inflow-limited). The defaulted-path discrepancy is flagged for investigation
+  in `opm-adjoint`/`opm-common`.
+- Freezing removes the `WI(K)` dependence from the forward model, a slight
+  divergence from the parent benchmark (JutulDarcy differentiates the full
+  well model). The proper fix is adding the WI term to the adjoint upstream;
+  then the deck can return to defaulted WI and the freeze be dropped.
 
 ## Tests
 
 ```bash
 .venv/bin/python -m unittest discover -s packages/opm-adjoint-chainrule/tests -v
+.venv/bin/python -m unittest discover -s src/opm_ert_demo/tests -v
 ```
