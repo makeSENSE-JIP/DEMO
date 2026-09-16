@@ -44,7 +44,9 @@ Selected stages can be rerun: `RUN_ID=<id> ./run_demo.sh collect`. Outputs:
   `predict.npz` (posterior predictions, fingerprinted)
 - `enif/storage/` — ERT storage with the prior and all five update iterations
 - `run.json` — manifest: settings, input/executable hashes, package versions,
-  chain-rule record, per-method ensemble IDs and artifacts
+  chain-rule record, per-method ensemble IDs and artifacts, and phase timings
+  (GN: forward/record/replay seconds; EnIF-MDA: per-step update/evaluate
+  seconds)
 
 ## The permeability chain rule (deliberately separate)
 

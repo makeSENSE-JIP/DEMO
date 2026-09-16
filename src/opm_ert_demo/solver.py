@@ -63,7 +63,11 @@ def fit_fixed_gn(prior, observations, errors, evaluate, vjp, settings, rng, chec
                 candidate = np.clip(center.parameters + alpha * step, *settings.log_bounds)
                 if np.array_equal(candidate, center.parameters):
                     continue
-                trial = evaluate(candidate[:, None], False)[0]
+                try:
+                    trial = evaluate(candidate[:, None], False)[0]
+                except Exception:
+                    print(f"line-search trial alpha={alpha} failed; rejecting step", flush=True)
+                    continue
                 if objectives(trial)[0] < before:
                     step_norm = float(np.linalg.norm(candidate - center.parameters))
                     center, recorded, accepted = trial, False, True

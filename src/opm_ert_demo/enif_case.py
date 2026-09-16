@@ -32,7 +32,8 @@ from .make_case import validate_run_inputs, write_json
 PRIOR_NAME = "enif_iter_0"
 
 
-def run_ert_model(config, args) -> None:
+def run_ert_model(config, args) -> float:
+    started = time.perf_counter()
     status_queue = queue.SimpleQueue()
     with use_runtime_plugins(get_site_plugins()):
         model = create_model(config, args, status_queue)
@@ -47,10 +48,12 @@ def run_ert_model(config, args) -> None:
             failure = event.msg
     if failure:
         raise RuntimeError(f"ERT evaluation failed: {failure}")
+    return time.perf_counter() - started
 
 
 def update_step(storage_path: Path, source_id: UUID, target_name: str, iteration: int,
-                weight: float, seed: int) -> UUID:
+                weight: float, seed: int) -> tuple[UUID, float]:
+    started = time.perf_counter()
     with open_storage(storage_path, mode="w") as storage:
         source = storage.get_ensemble(source_id)
         experiment = source.experiment
@@ -63,7 +66,7 @@ def update_step(storage_path: Path, source_id: UUID, target_name: str, iteration
             experiment.update_parameters, experiment.observation_keys, seed, snapshot,
             source.get_realization_mask_with_responses(), source, target,
             lambda event: None, global_scaling=weight)
-        return target.id
+        return target.id, time.perf_counter() - started
 
 
 def main() -> None:
@@ -83,7 +86,7 @@ def main() -> None:
     os.chdir(case_dir)
     try:
         config = ErtConfig.with_plugins(get_site_plugins()).from_file("enif.ert")
-        run_ert_model(config, SimpleNamespace(
+        prior_seconds = run_ert_model(config, SimpleNamespace(
             mode=ENSEMBLE_EXPERIMENT_MODE, realizations=None,
             current_ensemble=PRIOR_NAME, experiment_name="enif"))
         with open_storage(config.ens_path, mode="r") as storage:
@@ -91,24 +94,36 @@ def main() -> None:
             prior_id = next(a.id for a in storage.ensembles if a.name == PRIOR_NAME
                             and a.experiment.id == experiment.id)
         steps = []
+        update_seconds = 0.0
+        evaluation_seconds = prior_seconds
         source = prior_id
         for index, weight in enumerate(settings.inflation):
-            target_id = update_step(
+            target_id, step_update_seconds = update_step(
                 Path(config.ens_path), source, f"enif_iter_{index + 1}", index + 1,
                 weight, settings.seed)
-            run_ert_model(config, SimpleNamespace(
-                mode=EVALUATE_ENSEMBLE_MODE, realizations=None, ensemble_id=str(target_id)))
-            steps.append({"iteration": index + 1, "weight": weight, "ensemble": str(target_id)})
+            step_evaluate_seconds = run_ert_model(config, SimpleNamespace(
+                mode=EVALUATE_ENSEMBLE_MODE, realizations=None,
+                ensemble_id=str(target_id)))
+            update_seconds += step_update_seconds
+            evaluation_seconds += step_evaluate_seconds
+            steps.append({"iteration": index + 1, "weight": weight, "ensemble": str(target_id),
+                          "update_seconds": step_update_seconds,
+                          "evaluate_seconds": step_evaluate_seconds})
             source = target_id
     finally:
         os.chdir(original)
 
+    total_seconds = time.perf_counter() - started
     manifest["methods"]["enif"] = {
         "status": "complete",
         "weights": settings.inflation,
         "prior_ensemble": str(prior_id),
         "steps": steps,
-        "elapsed_seconds": time.perf_counter() - started,
+        "elapsed_seconds": total_seconds,
+        "timing": {"total_seconds": total_seconds, "steps": len(steps),
+                   "prior_evaluation_seconds": prior_seconds,
+                   "update_seconds": update_seconds,
+                   "evaluation_seconds": evaluation_seconds},
     }
     write_json(run_dir / "run.json", manifest)
     print(f"EnIF-MDA: {len(steps)} updates with weights {settings.inflation}")

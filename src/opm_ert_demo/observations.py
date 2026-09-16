@@ -36,12 +36,17 @@ class Observations:
             np.array(data["stds"], dtype=float)[:, columns],
         )
 
-    def misfit(self, predictions):
+    def misfit(self, predictions, columns=None):
         predictions = np.asarray(predictions)
-        if (predictions.ndim != 2 or predictions.shape[1] != self.values.size
+        values = self.values.ravel()
+        stds = self.stds.ravel()
+        if columns is not None:
+            values = values[columns]
+            stds = stds[columns]
+        if (predictions.ndim != 2 or predictions.shape[1] != values.size
                 or not np.isfinite(predictions).all()):
             raise ValueError("Predictions must be a finite members x observations matrix")
-        return 0.5 * np.sum(((predictions - self.values.ravel()) / self.stds.ravel()) ** 2, axis=1)
+        return 0.5 * np.sum(((predictions - values) / stds) ** 2, axis=1)
 
     def columns(self, key):
         return np.arange(len(self.dates)) * len(self.keys) + self.keys.index(key)

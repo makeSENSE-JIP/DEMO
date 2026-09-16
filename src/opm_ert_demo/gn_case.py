@@ -44,6 +44,8 @@ def observations_frame(obs: Observations) -> pl.DataFrame:
 
 
 class ForwardBatch:
+    TIMEOUT_SECONDS = 600.0
+
     def __init__(self, root: Path, template: str, obs: Observations, shape, executable, arguments, jobs: int):
         self.root = root
         self.template = template
@@ -53,16 +55,22 @@ class ForwardBatch:
         self.arguments = list(arguments)
         self.jobs = jobs
         self.batch = 0
+        self.timing = {"forward_seconds": 0.0, "forward_runs": 0,
+                       "record_seconds": 0.0, "record_runs": 0}
 
     def _member(self, index: int, column: np.ndarray, record: bool) -> Evaluation:
         workdir = self.root / f"runs/b{self.batch}-r{index}"
         workdir.mkdir(parents=True, exist_ok=False)
         (workdir / "MODEL.DATA").write_text(self.template, encoding="utf-8")
         write_grdecl(workdir / "permx.grdecl", "PERMX", np.exp(column).reshape(self.shape, order="F"))
-        extra = list(self.arguments)
+        extra = [a for a in self.arguments if not a.startswith("--threads-per-process")]
         if record:
             extra += ["--adjoint-file=adjoint_archive", "--adjoint-save=true"]
-        run_flow(self.executable, workdir, extra_args=tuple(extra))
+        started = time.perf_counter()
+        run_flow(self.executable, workdir, extra_args=tuple(extra), timeout=self.TIMEOUT_SECONDS)
+        kind = "record" if record else "forward"
+        self.timing[f"{kind}_seconds"] += time.perf_counter() - started
+        self.timing[f"{kind}_runs"] += 1
         dates, data = read_summary(workdir / "MODEL")
         by_key = {key: summary_at(dates, data[key], self.obs.dates) for key in self.obs.keys}
         predictions = np.stack([by_key[key] for key in self.obs.keys], axis=1).ravel()
@@ -113,14 +121,24 @@ def main() -> None:
             stream.write(json.dumps(row) + "\n")
 
     rng = np.random.default_rng(settings.seed)
+    vjp_timing = {"vjp_seconds": 0.0, "vjp_calls": 0}
+
+    def timed_vjp(evaluation, weights):
+        started = time.perf_counter()
+        try:
+            return adjoint.vjp(evaluation, weights)
+        finally:
+            vjp_timing["vjp_seconds"] += time.perf_counter() - started
+            vjp_timing["vjp_calls"] += 1
+
     fit = fit_fixed_gn(
-        prior, obs.values.ravel(), obs.stds.ravel(), forward, adjoint.vjp, settings.gn, rng, checkpoint,
+        prior, obs.values.ravel(), obs.stds.ravel(), forward, timed_vjp, settings.gn, rng, checkpoint,
     )
     sampling_rng = np.random.default_rng(settings.seed + 2)
     draws = prior.sample(settings.members, sampling_rng)
     samples, eigenvalues, sample_basis = posterior_samples(prior, fit, draws)
 
-    posterior_predictions = np.column_stack([e.predictions for e in forward(samples, False)])
+    posterior_predictions = np.stack([e.predictions for e in forward(samples, False)], axis=0)
     (gn_dir / "map").mkdir(exist_ok=True)
     write_grdecl(gn_dir / "map/permx.grdecl", "PERMX",
                  np.exp(fit.evaluation.parameters).reshape(prior.shape, order="F"))
@@ -144,6 +162,8 @@ def main() -> None:
         "map_data_misfit": float(obs.misfit(fit.evaluation.predictions[None, :])[0]),
         "posterior_mean_prediction_misfit": float(obs.misfit(posterior_predictions.mean(axis=0)[None, :])[0]),
         "elapsed_seconds": time.perf_counter() - started,
+        "timing": {"total_seconds": time.perf_counter() - started,
+                   "iterations": len(fit.history), **forward.timing, **vjp_timing},
         "artifacts": {
             "history": "lowrank_gn/history.jsonl",
             "laplace": "lowrank_gn/laplace.npz",

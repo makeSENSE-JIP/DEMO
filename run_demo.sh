@@ -47,6 +47,7 @@ if [[ ! -x "$VENV/bin/ert" ]]; then
 else
   "$VENV/bin/pip" install --no-deps --force-reinstall -q "$ROOT/packages/opm-adjoint-chainrule" "$ROOT/"
 fi
+export PATH="$VENV/bin:$OPM/opm-simulators-hnil/build/bin:$PATH"
 
 for stage in "${STAGES[@]}"; do
   case "$stage" in

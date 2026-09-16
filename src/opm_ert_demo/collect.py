@@ -47,8 +47,8 @@ def ensemble_fields(ensemble, shape) -> np.ndarray:
         values = np.asarray(ensemble.load_parameters("PERMX", iens)["values"].values, dtype=np.float64)
         if values.ndim == 4:
             values = values[0]
-        if values.shape != shape:
-            raise ValueError(f"stored PERMX field has shape {values.shape}, expected {shape}")
+        if values.shape != (*shape, 1):
+            raise ValueError(f"stored PERMX field has shape {values.shape}, expected {(*shape, 1)}")
         fields.append(values[..., 0])
     return np.stack(fields)
 
@@ -74,17 +74,16 @@ def collect_lowrank(run_dir: Path, obs: Observations, manifest: dict) -> dict:
     record = manifest["methods"]["lowrank_gn"]
     if record["status"] != "complete":
         raise RuntimeError("low-rank GN run is not complete")
-    gn_dir = run_dir / "lowrank_gn"
-    laplace = np.load(gn_dir / record["artifacts"]["laplace"])
-    cache = np.load(gn_dir / record["artifacts"]["predictions"])
+    laplace = np.load(run_dir / record["artifacts"]["laplace"])
+    cache = np.load(run_dir / record["artifacts"]["predictions"])
     if (cache["samples_sha256"].item() != digest(laplace["samples"])
             or cache["observations_sha256"].item() != digest(obs.values)):
         raise RuntimeError(
             "lowrank_gn/predict.npz does not match the stored posterior or observations; rerun gn_case")
+    history_path = run_dir / record["artifacts"]["history"]
     return {
         "members": laplace["samples"].shape[1],
-        "history": [json.loads(line) for line in
-                    (gn_dir / record["artifacts"]["history"]).read_text().splitlines() if line.strip()],
+        "history": [json.loads(line) for line in history_path.read_text().splitlines() if line.strip()],
         "map_parameters": laplace["map"],
         "map_predictions": laplace["predictions"],
         "converged": bool(laplace["converged"]),
@@ -138,7 +137,8 @@ def metric_rows(obs: Observations, ensembles: dict, prior_predictions: np.ndarra
             prior_width = width90(prior_predictions[:, mask])
             row = {
                 "ensemble": name, "group": group, "n_data": int(mask.sum()),
-                "mean_prediction_misfit": float(obs.misfit(subset.mean(axis=0)[None, :])[0]),
+                "mean_prediction_misfit": float(
+                    obs.misfit(subset.mean(axis=0)[None, :], columns=np.flatnonzero(mask))[0]),
                 "predictive_nll": predictive_nll(subset, flat_values[mask], flat_variances[mask]),
                 "coverage_50": coverage(subset, flat_values[mask], 0.5),
                 "coverage_90": coverage(subset, flat_values[mask], 0.9),
@@ -268,6 +268,11 @@ def main() -> None:
     )
     write_metrics(results / "metrics.csv", metric_rows(obs, ensembles, enif["prior"]))
     plot_results(results / "comparison.png", run_dir, obs, enif, lowrank, provenance)
+    for method in ("lowrank_gn", "enif"):
+        record = manifest["methods"][method]
+        timing = record.get("timing", {})
+        phases = {key: value for key, value in timing.items() if key.endswith("_seconds")}
+        print(f"timing {method}: " + " ".join(f"{key}={value:.1f}s" for key, value in phases.items()))
 
 
 if __name__ == "__main__":
