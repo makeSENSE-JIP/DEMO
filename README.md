@@ -117,6 +117,50 @@ code/venv_laplace/bin/python tools/export_reference.py \
   forward batches may use `jobs` workers (default 1, matching the parent's
   serial protocol).
 
+## Known gradient limitation: the Peaceman well-index term is missing
+
+The 5SPOT COMPDAT entries default the well index (`2* 0.25`), so OPM computes
+`WI` from the perforated cell's permeability (Peaceman: `WI ∝ sqrt(kx·ky)`).
+The forward map `K → J` therefore contains a well-index path, and the total
+derivative requires, at each perforated cell,
+
+```
+dJ/dK = [dJ/dK via inter-block transmissibility]   <- what OPM's adjoint emits
+      + lambda_cell · dq/dWI · dWI/dK              <- missing (cell rows)
+      + lambda_well  · dR_well/dWI · dWI/dK        <- missing (well rows)
+```
+
+`opm-adjoint` assembles `dJ/dPERM` exclusively from the inter-cell
+face-transmissibility gradient (`AdjointSolver::gatherPermGradients_`); the
+well rows are only contracted in the endpoint-scaling path. The
+`opm-adjoint-chainrule` package composes the three emitted columns correctly,
+but those columns are incomplete at well cells — the limitation is upstream of
+the package.
+
+Measured against central finite differences (record/replay with the same
+`matchw` objective; `/tmp` experiment, 2026-09):
+
+| Test | Adjoint / FD |
+|---|---|
+| Interior cell (13,25), eps 1e-2 | 0.7% relative error — correct |
+| Interior-only random direction (2495 cells) | 0.4–0.5% relative error — correct |
+| P1 well cell, eps 1e-2 | ~77–84% of the true derivative missing |
+| Full random direction (all 2500 cells) | ~80% of the directional derivative missing |
+
+The interior-only agreement also confirms the tied-permeability composition
+(`gx + gy + 0.001·gz`) itself. Because rate-objective sensitivity concentrates
+at perforated cells, the omission dominates global directional derivatives.
+A control deck with explicitly tabulated COMPDAT `WI` (no `K` dependence)
+shows no well-cell anomaly (≤2.4%, the same residual level as interior cells)
+— isolating the missing term to the `WI(K)` path. Consequences for this demo:
+GN search directions and the Laplace curvature are accurate away from the five
+well cells and materially wrong at them, until the term is added upstream
+(in `opm-adjoint`, by contracting `lambda_cell` and `lambda_well` against
+`dq/dWI · dWI/dK`) or the deck freezes `WI` by tabulating it. A small
+sub-percent systematic residual also remains at all cells (0.4–2.4%,
+eps-independent), consistent with minor upstream terms; it does not affect
+the conclusions above.
+
 ## Tests
 
 ```bash
