@@ -121,10 +121,10 @@ def prepare_case(source, target, settings, flow, adjoint):
         "prior": "reference/prior_precision.npz", "observations": "reference/observations.json",
         "frozen_well_index": {
             "reason": "adjoint dJ/dPERM omits dWI/dK; tabulated WI removes the WI(K) path",
-            "formula": "Peaceman (opm-common WellConnections.cpp), METRIC md*m",
+            "formula": "Peaceman (opm-common WellConnections.cpp), METRIC cP*m3/(day*bar)",
             "permeability_md": prior_mean_md, "cell_extents_m": list(CELL_EXTENTS_M),
-            "well_radius_m": 0.25, "skin": 0.0,
-            "values_md_m": well_index,
+            "well_diameter_m": 0.25, "skin": 0.0,
+            "values": well_index,
         },
         "input_sha256": input_hashes(target),
         "executables": {name: {"path": str(path), "sha256": sha256(path)}

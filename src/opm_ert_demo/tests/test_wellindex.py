@@ -1,16 +1,29 @@
 import math
 import unittest
 
-from opm_ert_demo.wellindex import peaceman_well_index, frozen_well_indexes
+from opm_ert_demo.wellindex import (
+    METRIC_TRANSMISSIBILITY_SI,
+    MILLIDARCY_TO_M2,
+    peaceman_well_index,
+    frozen_well_indexes,
+)
 
 
 class PeacemanTests(unittest.TestCase):
     def test_isotropic_uniform_cell_matches_hand_computation(self):
         r0 = 0.28 * math.sqrt(100.0**2 + 100.0**2) / 2.0
-        denominator = math.log(r0 / 0.25)
-        expected = 2.0 * math.pi * 500.0 * 1.0 / denominator
+        denominator = math.log(r0 / 0.125)
+        cf_si = 2.0 * math.pi * 500.0 * MILLIDARCY_TO_M2 * 1.0 / denominator
+        expected = cf_si / METRIC_TRANSMISSIBILITY_SI
         self.assertAlmostEqual(
-            peaceman_well_index(500.0, 500.0, 100.0, 100.0, 1.0), expected, places=12
+            peaceman_well_index(500.0, 500.0, 100.0, 100.0, 1.0),
+            expected,
+            places=12,
+        )
+        self.assertAlmostEqual(
+            peaceman_well_index(500.0, 500.0, 100.0, 100.0, 1.0),
+            5.2888512746,
+            places=9,
         )
 
     def test_isotropic_radius_independent_of_permeability(self):
@@ -25,11 +38,22 @@ class PeacemanTests(unittest.TestCase):
         aniso = peaceman_well_index(500.0, 125.0, 100.0, 100.0, 1.0)
         self.assertGreater(iso, aniso)
 
+    def test_diameter_is_halved_to_radius(self):
+        r0 = 0.28 * math.sqrt(100.0**2 + 100.0**2) / 2.0
+        with_default = peaceman_well_index(500.0, 500.0, 100.0, 100.0, 1.0)
+        with_double = peaceman_well_index(
+            500.0, 500.0, 100.0, 100.0, 1.0, diameter_m=0.5)
+        denominator_default = math.log(r0 / 0.125)
+        denominator_double = math.log(r0 / 0.25)
+        self.assertAlmostEqual(
+            with_default / with_double,
+            denominator_double / denominator_default,
+            places=12,
+        )
+
     def test_frozen_indexes_exist_for_all_demo_wells(self):
         indexes = frozen_well_indexes(500.0, 100.0, 100.0, 1.0)
-        self.assertEqual(
-            set(indexes), {"INJ1", "P1", "P2", "P3", "P4"}
-        )
+        self.assertEqual(set(indexes), {"INJ1", "P1", "P2", "P3", "P4"})
         self.assertTrue(all(value > 0 for value in indexes.values()))
 
     def test_invalid_inputs_raise(self):
