@@ -20,33 +20,71 @@ SPDE precision (sigma = 0.5, practical range 2500 m, anisotropy 2, rotation
 45 deg, mean log-PERMX = log 500) and the benchmark's truth data with its
 noise rule, exported once into `case/reference/` (see Provenance below).
 
-## Reproduce from scratch
+![Comparison of the two methods: data misfit vs serial runtime, posterior
+standard-deviation and mean fields of log-PERMX, and posterior predictions of
+WOPR:P1 and WWPR:P1/P2](docs/comparison.png)
 
-Requirements: Linux, Python 3.12+, internet access, ~15 GB disk for the OPM
-build, `bash`, `curl`, `git`, and a C++20 toolchain (provided by the install
-script via micromamba).
+## Install
+
+Requirements: Linux, Python 3.12+ (`python3` on PATH), internet access, ~15 GB
+disk for the OPM build, and `bash`, `curl`, `git`. The C++20 toolchain is
+installed by `install_opm.sh` via micromamba.
 
 ```bash
-./install_opm.sh   # 1. build OPM Flow + flow_adjoint (stamped, re-runnable)
-./run_demo.sh      # 2+3. python env, both cases, collection
+./install_opm.sh   # build the pinned OPM adjoint stack into opm/
 ```
 
-Every invocation writes a fresh, self-contained run directory
-`case/runs/<RUN_ID>` (timestamped by default; override with `RUN_ID=`).
-Selected stages can be rerun: `RUN_ID=<id> ./run_demo.sh collect`. Outputs:
+The build is staged and stamped: re-running it after a successful build is a
+no-op, so it is safe to invoke again on a fresh checkout of the build state.
+It produces `opm/opm-simulators-hnil/build/bin/flow` and
+`opm/opm-adjoint/build/flow_adjoint`. See `BUILDING_ADJOINT_FLOW.md` for
+background.
+
+## Run the experiments
+
+The Python environment (`.venv`) is created automatically on first use:
+
+```bash
+./run_demo.sh                # prepare + gn + enif + collect, fresh run id
+```
+
+This writes a fresh, self-contained run directory `case/runs/<RUN_ID>`
+(timestamped by default; override with `RUN_ID=`). Individual stages can be
+rerun against an existing run:
+
+```bash
+RUN_ID=run_20260917_201547 ./run_demo.sh gn       # redo only low-rank GN
+RUN_ID=run_20260917_201547 ./run_demo.sh collect  # redo metrics + figures
+```
+
+Stages are cumulative within a run (a stage validates the run manifest and
+its inputs first, so inputs must not change between stages). Typical full run
+times: GN a few tens of minutes, EnIF-MDA under ten minutes on a single host.
+
+Outputs in `case/runs/<RUN_ID>/`:
 
 - `results/metrics.csv` — mean-prediction misfit, predictive NLL, coverage and
   interval-width ratios, overall and per rate type (same quantities as the
   parent benchmark's post-processor)
-- `results/comparison.png` — misfit distributions, GN convergence, parameter
-  fields, WOPR:P1 posterior predictions
+- `results/comparison.png` — the illustration at the top of this README:
+  misfit vs elapsed runtime, posterior std/mean fields of log-PERMX, and
+  WOPR:P1 / WWPR:P1 / WWPR:P2 posterior predictions
+- `results/objective_vs_runtime.{csv,png}` — the fair-benchmark-style
+  misfit-vs-runtime figure, also available standalone:
+  `.venv/bin/opm-ert-demo-objective-plot --run-dir <RUN_DIR>`
+  (optional `--reference-history misfit_history.csv` overlays the
+  PET+JutulDarcy reference runs)
 - `lowrank_gn/` — `history.jsonl`, `laplace.npz` (MAP, eigensystem, samples),
   `predict.npz` (posterior predictions, fingerprinted)
 - `enif/storage/` — ERT storage with the prior and all five update iterations
 - `run.json` — manifest: settings, input/executable hashes, package versions,
   chain-rule record, per-method ensemble IDs and artifacts, and phase timings
-  (GN: forward/record/replay seconds; EnIF-MDA: per-step update/evaluate
-  seconds)
+  (GN: forward/record/replay seconds and VJP call/objective counts;
+  EnIF-MDA: per-step update/evaluate seconds)
+
+`docs/comparison.png` is a copy of `results/comparison.png` from the run
+`case/runs/run_20260917_201547`; regenerate it by rerunning that run's
+`collect` stage or any fresh full run.
 
 ## The permeability chain rule (deliberately separate)
 
@@ -99,18 +137,27 @@ code/venv_laplace/bin/python tools/export_reference.py \
 | `install_opm.sh` | Staged build of the pinned OPM adjoint stack into `opm/` |
 | `run_demo.sh` | Reproduction entry point (prepare / gn / enif / collect) |
 | `case/TRUE_MODEL/`, `case/MODEL.template`, `case/permeability.json`, `case/reference/` | Immutable case inputs copied into each run |
-| `src/opm_ert_demo/` | Case preparation, GN and EnIF-MDA drivers, collection |
+| `src/opm_ert_demo/` | Case preparation, GN and EnIF-MDA drivers, collection, objective plot |
 | `tools/export_reference.py` | Maintainer export of the reference prior/observations |
+| `docs/comparison.png` | Illustration: comparison figure from run `run_20260917_201547` |
 | `BUILDING_ADJOINT_FLOW.md` | Background on the OPM adjoint build |
 
 ## Method notes
 
 - **Low-rank GN** starts at a clipped prior draw, builds one output basis from
   ten prior-mean-centered candidates (energy 1.0, rank 40), takes exact
-  residual-gradient VJPs plus projected curvature, Levenberg-Marquardt damping
-  from 10 (x10 reject / /10 accept), a four-step halving line search, and stops
-  on gradient norm 1e-3 or step norm 1e-6 — the parent benchmark's policy.
-  Posterior draws use a separate stream seeded `seed + 2`, as in the parent.
+  residual-gradient VJPs plus projected curvature (the gradient and all basis
+  modes are replayed in one batched `OPMAdjoint.batch_vjp` call per
+  iteration), Levenberg-Marquardt damping from 10 (x10 reject / /10 accept),
+  a four-step halving line search, and stops on gradient norm 1e-3 or step
+  norm 1e-6 — the parent benchmark's policy. Posterior draws use a separate
+  stream seeded `seed + 2`, as in the parent.
+- **Prior sampling** replicates the benchmark's CHOLMOD sampler exactly: the
+  `sksparse.cholmod` factor and permutation of the precision matrix are
+  persisted in `case/reference/prior_sampler.npz`, and every draw is a sparse
+  triangular solve followed by the benchmark's Fortran-to-C grid round trip
+  (`src/opm_ert_demo/prior.py`). The file is checksummed in
+  `provenance.json` and validated before every run.
 - **EnIF-MDA** uses ERT's own run models in-process (the fork's CLI has no
   EnIF-MDA mode): `ensemble_experiment` loads the prior GRDECLs and evaluates,
   then each weight runs `analysis_EnIF` with `global_std_scaling = weight`
