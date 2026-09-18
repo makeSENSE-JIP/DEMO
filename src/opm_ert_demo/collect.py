@@ -164,82 +164,138 @@ def write_metrics(path: Path, rows: list[dict]) -> None:
         print(" ", line)
 
 
-def plot_results(out: Path, run_dir: Path, obs: Observations, enif: dict, lowrank: dict,
-                 provenance: dict) -> None:
-    import matplotlib
+def gn_trajectory(run_dir: Path, manifest: dict):
+    record = manifest["methods"].get("lowrank_gn")
+    if record is None or record["status"] != "complete":
+        return None
+    history = [json.loads(line) for line in
+               (run_dir / record["artifacts"]["history"]).read_text().splitlines() if line.strip()]
+    points = [(0.0, history[0]["data_misfit_before"])]
+    points.extend((row["elapsed_seconds"], row["data_misfit"]) for row in history)
+    return points
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
-    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
-    enif_prior_misfit = obs.misfit(enif["prior"])
-    enif_post_misfit = obs.misfit(enif["posterior"])
-    gn_post_misfit = obs.misfit(lowrank["posterior"])
-    gn_map_misfit = float(obs.misfit(lowrank["map_predictions"][None, :])[0])
-    mean_prediction = {
-        "EnIF prior": enif_prior_misfit.mean(), "EnIF posterior": enif_post_misfit.mean(),
-        "LowRank-GN posterior": gn_post_misfit.mean(), "LowRank-GN MAP": gn_map_misfit,
-    }
+def enif_trajectory(run_dir: Path, manifest: dict, obs: Observations):
+    record = manifest["methods"].get("enif")
+    if record is None or record["status"] != "complete":
+        return None
+    from ert.storage import open_storage
 
-    ax = axes[0, 0]
-    ax.boxplot([enif_prior_misfit, enif_post_misfit, gn_post_misfit],
-               tick_labels=["EnIF prior", "EnIF posterior", "LowRank-GN post"])
-    ax.scatter(range(1, 5), [mean_prediction[name] for name in
-                             ("EnIF prior", "EnIF posterior", "LowRank-GN posterior", "LowRank-GN MAP")],
-               marker="D", color="k", zorder=3, label="mean-prediction misfit")
-    ax.set_yscale("log")
-    ax.set_ylabel("objective data misfit")
-    ax.set_title("Data misfit (per member; diamonds: mean prediction)")
-    ax.legend()
-    ax.grid(alpha=0.3)
+    points = []
+    clock = 0.0
+    with open_storage(run_dir / "enif" / "storage", mode="r") as storage:
+        clock += record["timing"]["prior_evaluation_seconds"]
+        prior = storage.get_ensemble(UUID(record["prior_ensemble"]))
+        misfit = float(obs.misfit(ensemble_predictions(prior, obs).mean(axis=0)[None, :])[0])
+        points.append((clock, misfit))
+        for step in record["steps"]:
+            clock += step["update_seconds"] + step["evaluate_seconds"]
+            ensemble = storage.get_ensemble(UUID(step["ensemble"]))
+            misfit = float(obs.misfit(
+                ensemble_predictions(ensemble, obs).mean(axis=0)[None, :])[0])
+            points.append((clock, misfit))
+    return points
 
-    ax = axes[0, 1]
-    ax.plot([row["iteration"] for row in lowrank["history"]],
-            [row["objective"] for row in lowrank["history"]], "o-")
-    ax.set_yscale("log")
-    ax.set_xlabel("GN iteration")
-    ax.set_ylabel("posterior objective (data + prior)")
-    ax.set_title(f"Low-rank GN (converged={lowrank['converged']}, stop={lowrank['stop_reason']})")
-    ax.grid(alpha=0.3)
 
-    ax = axes[1, 0]
-    truth = true_field(run_dir)
-    prior_mean = np.full_like(truth, provenance["mean_log_permx"])
-    enif_mean = enif["posterior_fields"].mean(axis=0)
-    gn_map = lowrank["map_parameters"].reshape(50, 50, order="F")
-    panels = [(truth, "True log-PERMX"), (prior_mean, "Prior mean"),
-              (enif_mean, "EnIF posterior mean"), (gn_map, "LowRank-GN MAP")]
-    for index, (field, title) in enumerate(panels):
-        subplot = ax.inset_axes([(index % 2) * 0.5, 0.5 - (index // 2) * 0.5, 0.48, 0.45])
-        center = field.mean()
-        spread = max(float(field.std()) * 3, 0.1)
-        image = subplot.imshow(field, origin="lower", cmap="viridis",
-                               vmin=center - spread, vmax=center + spread)
-        subplot.set_title(title, fontsize=9)
-        subplot.set_xticks([])
-        subplot.set_yticks([])
-        fig.colorbar(image, ax=subplot, fraction=0.046)
-    ax.axis("off")
-
-    ax = axes[1, 1]
-    columns = obs.columns("WOPR:P1")
-    key_index = obs.keys.index("WOPR:P1")
+def _plot_prediction(ax, obs, key, enif_post, gn_post):
+    columns = obs.columns(key)
+    key_index = obs.keys.index(key)
     for name, predictions, color in (
-            ("EnIF posterior", enif["posterior"], "tab:blue"),
-            ("LowRank-GN posterior", lowrank["posterior"], "tab:orange")):
+            ("EnIF posterior", enif_post, "tab:blue"),
+            ("LowRank-GN posterior", gn_post, "tab:orange")):
         values = predictions[:, columns]
         ax.plot(obs.dates, np.median(values, axis=0), color=color, label=name)
         ax.fill_between(obs.dates, np.quantile(values, 0.1, axis=0),
                         np.quantile(values, 0.9, axis=0), color=color, alpha=0.2)
     ax.errorbar(obs.dates, obs.values[:, key_index], yerr=obs.stds[:, key_index],
                 fmt="k.", label="observations", capsize=3)
-    ax.set_title("WOPR:P1 posterior predictions")
-    ax.legend()
+    ax.set_title(f"{key} posterior predictions")
+    ax.set_xlabel("Date")
+    ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
 
-    fig.suptitle("5SPOT benchmark: OPM adjoints + ERT - EnIF-MDA vs low-rank Gauss-Newton")
-    fig.tight_layout()
-    fig.savefig(out, dpi=160)
+
+def _plot_field_pair(ax, fig, panels, panel_title):
+    ax.axis("off")
+    vmin = min(float(p[0].min()) for p in panels)
+    vmax = max(float(p[0].max()) for p in panels)
+    for index, (field, title) in enumerate(panels):
+        left = 0.05 if index == 0 else 0.55
+        subplot = ax.inset_axes([left, 0.05, 0.40, 0.80])
+        image = subplot.imshow(field, origin="lower", cmap="viridis", vmin=vmin, vmax=vmax,
+                               aspect="equal")
+        subplot.set_title(title, fontsize=10)
+        subplot.set_xticks([])
+        subplot.set_yticks([])
+        fig.colorbar(image, ax=subplot, fraction=0.04, pad=0.02)
+    ax.set_title(panel_title, fontsize=11)
+
+
+def plot_results(out: Path, run_dir: Path, obs: Observations, enif: dict, lowrank: dict,
+                 provenance: dict) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+
+    fig = plt.figure(figsize=(14, 14))
+    gs = GridSpec(3, 2, figure=fig, hspace=0.40, wspace=0.35)
+
+    # Row 0, col 0: data misfit vs runtime
+    ax = fig.add_subplot(gs[0, 0])
+    gn_traj = gn_trajectory(run_dir, json.loads((run_dir / "run.json").read_text()))
+    enif_traj = enif_trajectory(run_dir, json.loads((run_dir / "run.json").read_text()), obs)
+    if gn_traj:
+        ax.plot([p[0] for p in gn_traj], [p[1] for p in gn_traj], "o-",
+                color="tab:orange", label="LowRank-GN", markersize=4)
+    if enif_traj:
+        ax.plot([p[0] for p in enif_traj], [p[1] for p in enif_traj], "s-",
+                color="tab:blue", label="EnIF-MDA", markersize=4)
+    ax.set_yscale("log")
+    ax.set_xlabel("Elapsed serial wall-clock time (s)")
+    ax.set_ylabel("Data misfit")
+    ax.set_title("Misfit vs runtime")
+    ax.legend()
+    ax.grid(alpha=0.3, linestyle="--", which="both")
+
+    # Row 0, col 1: WWPR:P2 posterior predictions (water breakthrough)
+    ax = fig.add_subplot(gs[0, 1])
+    _plot_prediction(ax, obs, "WWPR:P2", enif["posterior"], lowrank["posterior"])
+
+    # Row 1, col 0: posterior standard deviation fields (log-PERMX)
+    ax = fig.add_subplot(gs[1, 0])
+    enif_std = enif["posterior_fields"].std(axis=0)
+    record = json.loads((run_dir / "run.json").read_text())["methods"]["lowrank_gn"]
+    laplace = np.load(run_dir / record["artifacts"]["laplace"])
+    gn_samples = laplace["samples"]
+    gn_fields = np.array([s.reshape(50, 50, order="F") for s in gn_samples.T])
+    gn_field_std = gn_fields.std(axis=0)
+    _plot_field_pair(ax, fig, [
+        (enif_std, "EnIF posterior std"),
+        (gn_field_std, "LowRank-GN posterior std"),
+    ], "Posterior standard deviation (log-PERMX field)")
+
+    # Row 1, col 1: WOPR:P1 posterior predictions
+    ax = fig.add_subplot(gs[1, 1])
+    _plot_prediction(ax, obs, "WOPR:P1", enif["posterior"], lowrank["posterior"])
+
+    # Row 2, col 0: posterior mean fields (log-PERMX)
+    ax = fig.add_subplot(gs[2, 0])
+    enif_mean = enif["posterior_fields"].mean(axis=0)
+    gn_mean = np.array([s.reshape(50, 50, order="F") for s in gn_samples.T]).mean(axis=0)
+    _plot_field_pair(ax, fig, [
+        (enif_mean, "EnIF posterior mean"),
+        (gn_mean, "LowRank-GN posterior mean"),
+    ], "Posterior mean (log-PERMX field)")
+
+    # Row 2, col 1: WWPR:P1 posterior predictions
+    ax = fig.add_subplot(gs[2, 1])
+    _plot_prediction(ax, obs, "WWPR:P1", enif["posterior"], lowrank["posterior"])
+
+    fig.suptitle("5SPOT benchmark: OPM adjoints + ERT — EnIF-MDA vs low-rank Gauss-Newton",
+                 fontsize=13)
+    fig.savefig(out, dpi=160, bbox_inches="tight")
     print(f"figure: {out}")
 
 

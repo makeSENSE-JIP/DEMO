@@ -1,6 +1,7 @@
 """Fixed prior-output-basis GN policy from the parent serial benchmark."""
 
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -17,8 +18,8 @@ class Fit:
     stop_reason: str
 
 
-def fit_fixed_gn(prior, observations, errors, evaluate, vjp, settings, rng, checkpoint):
-    """Evaluate accepts (parameters x members, record); VJPs are unwhitened."""
+def fit_fixed_gn(prior, observations, errors, evaluate, batch_vjp, settings, rng, checkpoint):
+    """Evaluate accepts (parameters x members, record); batch_vjp takes a list of weights."""
     started = time.perf_counter()
     x = np.clip(prior.mean + prior.sample(1, rng)[:, 0], *settings.log_bounds)
     candidates = np.clip(prior.mean[:, None] + prior.sample(settings.basis_members, rng), *settings.log_bounds)
@@ -37,20 +38,19 @@ def fit_fixed_gn(prior, observations, errors, evaluate, vjp, settings, rng, chec
         data = float(residual @ residual / 2)
         return data + float(delta @ prior.apply(delta) / 2), data
 
-    def derivative(evaluation):
-        gradient = vjp(evaluation, (evaluation.predictions - observations) / errors**2)
-        return gradient + prior.apply(evaluation.parameters - prior.mean)
-
-    def projected(evaluation):
-        if not basis.shape[1]:
-            return np.empty((0, prior.mean.size))
-        return np.stack([vjp(evaluation, column / errors) for column in basis.T])
+    def derivatives(evaluation):
+        grad_weight = (evaluation.predictions - observations) / errors**2
+        mode_weights = [col / errors for col in basis.T] if basis.shape[1] else []
+        results = batch_vjp(evaluation, [grad_weight, *mode_weights])
+        gradient = results[0] + prior.apply(evaluation.parameters - prior.mean)
+        jacobian = np.stack(results[1:]) if basis.shape[1] else np.empty((0, prior.mean.size))
+        return gradient, jacobian
 
     for iteration in range(settings.max_iterations):
         if not recorded:
             center = evaluate(center.parameters[:, None], True)[0]
             recorded = True
-        gradient = derivative(center)
+        gradient, jacobian = derivatives(center)
         norm = float(np.linalg.norm(gradient))
         before, data_before = objectives(center)
         accepted = False
@@ -58,7 +58,7 @@ def fit_fixed_gn(prior, observations, errors, evaluate, vjp, settings, rng, chec
         if norm < settings.gradient_tolerance:
             converged, stop_reason = True, "gradient_tolerance"
         else:
-            step = woodbury_step(prior, projected(center), gradient, damping)
+            step = woodbury_step(prior, jacobian, gradient, damping)
             for alpha in settings.alphas:
                 candidate = np.clip(center.parameters + alpha * step, *settings.log_bounds)
                 if np.array_equal(candidate, center.parameters):
@@ -90,10 +90,10 @@ def fit_fixed_gn(prior, observations, errors, evaluate, vjp, settings, rng, chec
             break
     if not recorded:
         center = evaluate(center.parameters[:, None], True)[0]
-    final_norm = float(np.linalg.norm(derivative(center)))
-    if final_norm < settings.gradient_tolerance:
+    gradient, jacobian = derivatives(center)
+    if float(np.linalg.norm(gradient)) < settings.gradient_tolerance:
         converged, stop_reason = True, "gradient_tolerance"
-    return Fit(center, basis, projected(center), history, converged, stop_reason)
+    return Fit(center, basis, jacobian, history, converged, stop_reason)
 
 
 def posterior_samples(prior, fit, draws, eigenvalue_tolerance=1e-5):

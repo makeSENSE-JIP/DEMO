@@ -121,18 +121,19 @@ def main() -> None:
             stream.write(json.dumps(row) + "\n")
 
     rng = np.random.default_rng(settings.seed)
-    vjp_timing = {"vjp_seconds": 0.0, "vjp_calls": 0}
+    vjp_timing = {"vjp_seconds": 0.0, "vjp_calls": 0, "vjp_objectives": 0}
 
-    def timed_vjp(evaluation, weights):
+    def timed_batch_vjp(evaluation, weights):
         started = time.perf_counter()
         try:
-            return adjoint.vjp(evaluation, weights)
+            return adjoint.batch_vjp(evaluation, weights)
         finally:
             vjp_timing["vjp_seconds"] += time.perf_counter() - started
             vjp_timing["vjp_calls"] += 1
+            vjp_timing["vjp_objectives"] += len(weights)
 
     fit = fit_fixed_gn(
-        prior, obs.values.ravel(), obs.stds.ravel(), forward, timed_vjp, settings.gn, rng, checkpoint,
+        prior, obs.values.ravel(), obs.stds.ravel(), forward, timed_batch_vjp, settings.gn, rng, checkpoint,
     )
     sampling_rng = np.random.default_rng(settings.seed + 2)
     draws = prior.sample(settings.members, sampling_rng)

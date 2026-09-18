@@ -22,6 +22,7 @@
   },
   "asset_sha256": {
     "observations.json": "a79e49c7b450c6a07b3cff3c6f34d260ed8799583a61f13e973ca85cdd44f16e",
-    "prior_precision.npz": "f9208cbdd861173cb439830327d1df9a7d32c2254c4e576e3479127666abecea"
+    "prior_precision.npz": "f9208cbdd861173cb439830327d1df9a7d32c2254c4e576e3479127666abecea",
+    "prior_sampler.npz": "80e197a96c56878923513c8ae0d3b79e4dc441d6fe58015916335d493f666c9b"
   }
 }

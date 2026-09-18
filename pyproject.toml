@@ -20,6 +20,7 @@ dependencies = [
 [project.scripts]
 opm-ert-demo-make-case = "opm_ert_demo.make_case:main"
 opm-ert-demo-collect = "opm_ert_demo.collect:main"
+opm-ert-demo-objective-plot = "opm_ert_demo.objective_plot:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/opm_ert_demo"]

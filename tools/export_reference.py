@@ -43,6 +43,21 @@ def main():
     if not np.array_equal(np.asarray(mask), np.ones((50, 50))):
         raise ValueError("Expected the all-active 50 x 50 benchmark layer")
     sp.save_npz(output / "prior_precision.npz", sp.csc_matrix(precision))
+
+    from sksparse.cholmod import cho_factor
+
+    factor = cho_factor(sp.csc_matrix(precision), lower=True)
+    lower = factor.L.tocsc()
+    np.savez(
+        output / "prior_sampler.npz",
+        L_data=lower.data,
+        L_indices=lower.indices,
+        L_indptr=lower.indptr,
+        L_shape=np.asarray(lower.shape, dtype=np.int64),
+        d=np.asarray(factor.D.diagonal(), dtype=np.float64).ravel(),
+        perm=np.asarray(factor.perm, dtype=np.int64),
+        ordering=np.array("cholmod-default"),
+    )
     sources = [
         data_dir / "true_data.pkl", data_dir / "true_data_var.pkl",
         root / "EnIF-MDA/PRIOR/sample_prior.py",
@@ -57,7 +72,8 @@ def main():
         "calibrate": True, "seed": 0,
         "source_sha256": {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
         "asset_sha256": {name: hashlib.sha256((output / name).read_bytes()).hexdigest()
-                         for name in ("observations.json", "prior_precision.npz")},
+                         for name in ("observations.json", "prior_precision.npz",
+                                      "prior_sampler.npz")},
     }
     (output / "provenance.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print(f"Exported benchmark inputs to {output}")
