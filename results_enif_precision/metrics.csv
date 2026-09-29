@@ -1,0 +1,17 @@
+ensemble,group,n_data,mean_prediction_misfit,predictive_nll,coverage_50,coverage_90,coverage_95,width90,width90_over_prior
+EnIF prior,all,60,265.454,330.871,0.9,1,1,2001.13,1
+EnIF prior,WOPR,20,56.9785,81.7943,0.85,1,1,75.3937,1
+EnIF prior,WGPR,20,56.9785,168.743,0.85,1,1,5826.29,1
+EnIF prior,WWPR,20,151.497,80.3342,1,1,1,101.692,1
+EnIF-MDA (approximate) posterior,all,60,4.49156,256.431,0.916667,1,1,393.062,0.19642
+EnIF-MDA (approximate) posterior,WOPR,20,1.69067,57.509,0.9,1,1,14.917,0.197854
+EnIF-MDA (approximate) posterior,WGPR,20,1.69067,144.457,0.9,1,1,1152.76,0.197854
+EnIF-MDA (approximate) posterior,WWPR,20,1.11022,54.4647,0.95,1,1,11.5111,0.113195
+EnIF-MDA (complete) posterior,all,60,3.87729,253.667,0.933333,1,1,362.91,0.181353
+EnIF-MDA (complete) posterior,WOPR,20,1.57102,56.7817,0.9,1,1,13.7803,0.182777
+EnIF-MDA (complete) posterior,WGPR,20,1.57102,143.73,0.9,1,1,1064.92,0.182777
+EnIF-MDA (complete) posterior,WWPR,20,0.735254,53.1549,1,1,1,10.0338,0.098668
+LowRank-GN posterior,all,60,17.6504,258.047,0.616667,1,1,376.371,0.18808
+LowRank-GN posterior,WOPR,20,3.9379,57.4706,0.6,1,1,14.2721,0.189301
+LowRank-GN posterior,WGPR,20,3.9379,144.419,0.6,1,1,1102.92,0.189301
+LowRank-GN posterior,WWPR,20,9.77457,56.158,0.65,1,1,11.9194,0.11721

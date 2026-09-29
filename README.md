@@ -9,7 +9,10 @@ the **ERT** ensemble tool:
    low-rank Laplace posterior sampling around the MAP.
 2. **EnIF-MDA** — five assimilation passes of the ensemble information filter
    with inflation weights `[5, 5, 5, 5, 5]` (matching the benchmark's
-   `EnIF-MDA` configuration).
+   `EnIF-MDA` configuration), accumulating posterior information between
+   passes. The prior-precision estimator is selectable: `approximate`
+   (neighbourhood-expanded Cholesky, default) or `complete` (fill-reducing
+   Cholesky pattern of the parameter graph).
 
 The synthetic case is the 5SPOT five-spot problem: a 50 x 50 x 1 grid, one
 water injector in the centre, four BHP-controlled oil producers in the corners,
@@ -20,7 +23,7 @@ SPDE precision (sigma = 0.5, practical range 2500 m, anisotropy 2, rotation
 45 deg, mean log-PERMX = log 500) and the benchmark's truth data with its
 noise rule, exported once into `case/reference/` (see Provenance below).
 
-![Comparison of the two methods: data misfit vs serial runtime, posterior
+![Comparison of the methods: data misfit vs serial runtime, posterior
 standard-deviation and mean fields of log-PERMX, and posterior predictions of
 WOPR:P1 and WWPR:P1/P2](docs/comparison.png)
 
@@ -48,6 +51,11 @@ The Python environment (`.venv`) is created automatically on first use:
 ./run_demo.sh                # prepare + gn + enif + collect, fresh run id
 ```
 
+The ert pin in `pyproject.toml` includes the EnIF-MDA accumulation fix
+(fork branch `feat/low-rank-gn-sampler`), so fresh installs run the
+correct algorithm. To work against a local fork checkout instead, prefix
+with `PYTHONPATH="$(realpath ../code/ert/src)"`.
+
 This writes a fresh, self-contained run directory `case/runs/<RUN_ID>`
 (timestamped by default; override with `RUN_ID=`). Individual stages can be
 rerun against an existing run:
@@ -59,7 +67,9 @@ RUN_ID=run_20260917_201547 ./run_demo.sh collect  # redo metrics + figures
 
 Stages are cumulative within a run (a stage validates the run manifest and
 its inputs first, so inputs must not change between stages). Typical full run
-times: GN a few tens of minutes, EnIF-MDA under ten minutes on a single host.
+times on one host: GN ≈ 37 min; EnIF-MDA ≈ 30 min (approximate) / ≈ 31 min
+(complete), of which the five analysis updates take 9–16 s and everything
+else is the 600 serial flow evaluations.
 
 Outputs in `case/runs/<RUN_ID>/`:
 
@@ -82,9 +92,30 @@ Outputs in `case/runs/<RUN_ID>/`:
   (GN: forward/record/replay seconds and VJP call/objective counts;
   EnIF-MDA: per-step update/evaluate seconds)
 
-`docs/comparison.png` is a copy of `results/comparison.png` from the run
-`case/runs/run_20260917_201547`; regenerate it by rerunning that run's
-`collect` stage or any fresh full run.
+`docs/comparison.png` is the combined both-estimator figure from
+`results_enif_precision/` (see below); regenerate it with
+`tools/compare_enif_precisions.py`.
+
+## Precision-estimator comparison (timed rerun)
+
+Fresh EnIF-MDA reruns of the updated (information-accumulating) algorithm,
+one per prior-precision estimator, same seed and serial protocol; the GN
+stage is unchanged and its timed record from the same host is reused:
+
+![Misfit vs runtime for LowRank-GN and both EnIF-MDA precision
+estimators](docs/objective_vs_runtime.png)
+
+| run | total | prior eval | 5 updates | evaluations | posterior mean-prediction misfit |
+|---|---:|---:|---:|---:|---:|
+| EnIF-MDA `approximate` | 1795 s | 287 s | 9.2 s | 1786 s | 4.49 |
+| EnIF-MDA `complete` | 1860 s | 310 s | 15.6 s | 1845 s | 3.88 |
+| LowRank-GN (reused) | 2239 s | — | — | — | 17.65 |
+
+Both estimators converge the ensemble from a prior misfit of 265.5; the
+complete Cholesky pattern costs ~70% more in the update phase (still seconds)
+and reaches a slightly lower posterior misfit and narrower posterior spread
+(`results_enif_precision/metrics.csv`). To reproduce:
+`ENIF_PRECISION_ESTIMATOR=complete RUN_ID=<id> ./run_demo.sh enif`.
 
 ## The permeability chain rule (deliberately separate)
 
@@ -138,8 +169,11 @@ code/venv_laplace/bin/python tools/export_reference.py \
 | `run_demo.sh` | Reproduction entry point (prepare / gn / enif / collect) |
 | `case/TRUE_MODEL/`, `case/MODEL.template`, `case/permeability.json`, `case/reference/` | Immutable case inputs copied into each run |
 | `src/opm_ert_demo/` | Case preparation, GN and EnIF-MDA drivers, collection, objective plot |
+| `notebooks/linear_enif_mda.ipynb` | Executed linear-model walkthrough: prior graph, analytical posterior, ES, EnIF and EnIF-MDA moments and plots |
 | `tools/export_reference.py` | Maintainer export of the reference prior/observations |
-| `docs/comparison.png` | Illustration: comparison figure from run `run_20260917_201547` |
+| `tools/compare_enif_precisions.py` | Combined approximate-vs-complete EnIF-MDA comparison from two run directories |
+| `results_enif_precision/` | Timed both-estimator rerun artifacts: metrics, misfit-vs-runtime data and the README figures |
+| `docs/comparison.png` | Illustration: comparison figure from the timed precision-estimator rerun |
 | `BUILDING_ADJOINT_FLOW.md` | Background on the OPM adjoint build |
 
 ## Method notes
@@ -159,9 +193,14 @@ code/venv_laplace/bin/python tools/export_reference.py \
   (`src/opm_ert_demo/prior.py`). The file is checksummed in
   `provenance.json` and validated before every run.
 - **EnIF-MDA** uses ERT's own run models in-process (the fork's CLI has no
-  EnIF-MDA mode): `ensemble_experiment` loads the prior GRDECLs and evaluates,
-  then each weight runs `analysis_EnIF` with `global_std_scaling = weight`
-  (the ES-MDA inflation convention) followed by an ensemble evaluation.
+   EnIF-MDA mode): `ensemble_experiment` loads the prior GRDECLs and evaluates,
+   then each weight runs `analysis_EnIF` with the preceding posterior precision
+   as its prior. Each step inflates the full noisy-residual variance by its MDA
+   weight, re-estimates the observation map from the evaluated ensemble, and
+   evaluates the updated ensemble before the next step. The initial prior
+   precision is fitted once on the first pass (`--precision-estimator
+   approximate|complete`); later passes inherit the accumulated posterior
+   precision, transformed into the current parameter standardization.
 - Recorded forwards and adjoint replays run serially (one per host); plain
   forward batches may use `jobs` workers (default 1, matching the parent's
   serial protocol).
