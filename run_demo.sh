@@ -63,7 +63,8 @@ for stage in "${STAGES[@]}"; do
       ;;
     enif)
       echo "== stage enif: EnIF-MDA (five weighted updates)"
-      "$VENV/bin/python" -m opm_ert_demo.enif_case --run-dir "$RUN_DIR"
+      "$VENV/bin/python" -m opm_ert_demo.enif_case --run-dir "$RUN_DIR" \
+        --precision-estimator "${ENIF_PRECISION_ESTIMATOR:-approximate}"
       ;;
     collect)
       echo "== stage collect: metrics and comparison figure"
